@@ -5,7 +5,6 @@ For the last 1.5 years in production,
 we have been making good and bad decisions that impacted our developer experience dramatically.
 Some of them are worth sharing. 
 
-
 ### Contents
 1. [Project Structure. Consistent & predictable.](https://github.com/zhanymkanov/fastapi-best-practices#1-project-structure-consistent--predictable)
 2. [Excessively use Pydantic for data validation.](https://github.com/zhanymkanov/fastapi-best-practices#2-excessively-use-pydantic-for-data-validation)
@@ -23,15 +22,16 @@ Some of them are worth sharing.
 14. [Set tests client async from day 0.](https://github.com/zhanymkanov/fastapi-best-practices#14-set-tests-client-async-from-day-0)
 15. [BackgroundTasks > asyncio.create_task.](https://github.com/zhanymkanov/fastapi-best-practices#15-backgroundtasks--asynciocreate_task)
 16. [Typing is important.](https://github.com/zhanymkanov/fastapi-best-practices#16-typing-is-important)
-17. [Save files in chunk.](https://github.com/zhanymkanov/fastapi-best-practices#17-save-files-in-chunk)
+17. [Save files in chunks.](https://github.com/zhanymkanov/fastapi-best-practices#17-save-files-in-chunks)
 18. [Be careful with dynamic pydantic fields.](https://github.com/zhanymkanov/fastapi-best-practices#18-be-careful-with-dynamic-pydantic-fields)
 19. [SQL-first, Pydantic-second.](https://github.com/zhanymkanov/fastapi-best-practices#19-sql-first-pydantic-second) 
 20. [Validate hosts, if users can send publicly available URLs.](https://github.com/zhanymkanov/fastapi-best-practices#20-validate-hosts-if-users-can-send-publicly-available-urls)
 21. [Raise a ValueError in custom pydantic validators, if schema directly faces the client.](https://github.com/zhanymkanov/fastapi-best-practices#21-raise-a-valueerror-in-custom-pydantic-validators-if-schema-directly-faces-the-client)
-22. [Don't forget FastAPI converts Response Pydantic Object...](https://github.com/zhanymkanov/fastapi-best-practices#22-dont-forget-fastapi-converts-response-pydantic-object-to-dict-then-to-an-instance-of-responsemodel-then-to-dict-then-to-json)
+22. [FastAPI converts Pydantic objects to dict, then to Pydantic object, then to JSON](https://github.com/zhanymkanov/fastapi-best-practices#22-fastapi-converts-pydantic-objects-to-dict-then-to-pydantic-object-then-to-json)
 23. [If you must use sync SDK, then run it in a thread pool.](https://github.com/zhanymkanov/fastapi-best-practices#23-if-you-must-use-sync-sdk-then-run-it-in-a-thread-pool)
-24. [Use linters (black, isort, autoflake).](https://github.com/zhanymkanov/fastapi-best-practices#24-use-linters-black-isort-autoflake)
+24. [Use linters (black, ruff).](https://github.com/zhanymkanov/fastapi-best-practices#24-use-linters-black-ruff)
 25. [Bonus Section.](https://github.com/zhanymkanov/fastapi-best-practices#bonus-section)
+<p style="text-align: center;"> <i>Project <a href="https://github.com/zhanymkanov/fastapi_production_template">sample</a> built with these best-practices in mind. </i> </p>
 
 ### 1. Project Structure. Consistent & predictable
 There are many ways to structure the project, but the best structure is a structure that is consistent, straightforward, and has no surprises.
@@ -107,7 +107,7 @@ fastapi-project
    6. `constants.py` - module specific constants and error codes
    7. `config.py` - e.g. env vars
    8. `utils.py` - non-business logic functions, e.g. response normalization, data enrichment, etc.
-   9. `exceptions` - module specific exceptions, e.g. `PostNotFound`, `InvalidUserData`
+   9. `exceptions.py` - module specific exceptions, e.g. `PostNotFound`, `InvalidUserData`
 3. When package requires services or dependencies or constants from other packages - import them with an explicit module name
 ```python
 from src.auth import constants as auth_constants
@@ -140,7 +140,7 @@ class UserBase(BaseModel):
 
 ```
 ### 3. Use dependencies for data validation vs DB
-Pydantic can only validate the values of client input. 
+Pydantic can only validate the values from client input. 
 Use dependencies to validate data against database constraints like email already exists, user not found, etc. 
 ```python3
 # dependencies.py
@@ -213,7 +213,6 @@ async def valid_owned_post(
 # router.py
 @router.get("/users/{user_id}/posts/{post_id}", response_model=PostResponse)
 async def get_user_post(post: Mapping = Depends(valid_owned_post)):
-    """Get post that belong the user."""
     return post
 
 ```
@@ -303,7 +302,7 @@ also checks if the profile is creator, then it's better to rename `creator_id` p
 ```python3
 # src.profiles.dependencies
 async def valid_profile_id(profile_id: UUID4) -> Mapping:
-    profile = await service.get_by_id(post_id)
+    profile = await service.get_by_id(profile_id)
     if not profile:
         raise ProfileNotFound()
 
@@ -327,12 +326,12 @@ async def get_user_profile_by_id(profile: Mapping = Depends(valid_profile_id)):
 async def get_user_profile_by_id(
      creator_profile: Mapping = Depends(valid_creator_id)
 ):
-    """Get profile by id."""
+    """Get creator's profile by id."""
     return creator_profile
 
 ```
 
-Use /me endpoints for users own resources (e.g. `GET /profiles/me`, `GET /users/me/posts`)
+Use /me endpoints for users resources (e.g. `GET /profiles/me`, `GET /users/me/posts`)
    1. No need to validate that user id exists - it's already checked via auth method
    2. No need to check whether the user id belongs to the requester
 
@@ -366,8 +365,8 @@ def good_ping():
 
 @router.get("/perfect-ping")
 async def perfect_ping():
-    await asyncio.sleep(10) # non I/O blocking operation
-    pong = await service.async_get_pong()  # non I/O blocking db call
+    await asyncio.sleep(10) # non-blocking I/O operation
+    pong = await service.async_get_pong()  # non-blocking I/O db call
 
     return {"pong": pong}
 
@@ -389,6 +388,7 @@ async def perfect_ping():
    3. While `good_ping` is being executed, event loop selects next tasks from the queue and works on them (e.g. accept new request, call db)
       - Independently of main thread (i.e. our FastAPI app), 
         worker thread will be waiting for `time.sleep` to finish and then for `service.get_pong` to finish
+      - Sync operation blocks only the side thread, not the main one.
    4. When `good_ping` finishes its work, server returns a response to the client
 3. `GET /perfect-ping`
    1. FastAPI server receives a request and starts handling it
@@ -398,7 +398,7 @@ async def perfect_ping():
    5. Event loop selects next tasks from the queue and works on them (e.g. accept new request, call db)
    6. When `service.async_get_pong` is done, server returns a response to the client
 
-The second caveat is that operations that are non-blocking awaitables or are sent to thread pool must be I/O intensive tasks (e.g. open file, db call, external API call).
+The second caveat is that operations that are non-blocking awaitables or are sent to the thread pool must be I/O intensive tasks (e.g. open file, db call, external API call).
 - Awaiting CPU-intensive tasks (e.g. heavy calculations, data processing, video transcoding) is worthless since the CPU has to work to finish the tasks, 
 while I/O operations are external and server does nothing while waiting for that operations to finish, thus it can go to the next tasks.
 - Running CPU-intensive tasks in other threads also isn't effective, because of [GIL](https://realpython.com/python-gil/). 
@@ -416,16 +416,11 @@ Having a controllable global base model allows us to customize all the models wi
 For example, we could have a standard datetime format or add a super method for all subclasses of the base model.
 ```python
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-import orjson
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, root_validator
-
-
-def orjson_dumps(v, *, default):
-    # orjson.dumps returns bytes, to match standard json.dumps we need to decode
-    return orjson.dumps(v, default=default).decode()
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 def convert_datetime_to_gmt(dt: datetime) -> str:
@@ -435,15 +430,15 @@ def convert_datetime_to_gmt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-class ORJSONModel(BaseModel):
-    class Config:
-        json_loads = orjson.loads
-        json_dumps = orjson_dumps
-        json_encoders = {datetime: convert_datetime_to_gmt}  # method for customer JSON encoding of datetime fields
+class CustomModel(BaseModel):
+    model_config = ConfigDict(
+        json_encoders={datetime: convert_datetime_to_gmt},
+        populate_by_name=True,
+    )
 
-    @root_validator()
-    def set_null_microseconds(cls, data: dict) -> dict:
-       """Drops microseconds in all the datetime field values."""
+    @model_validator(mode="before")
+    @classmethod
+    def set_null_microseconds(cls, data: dict[str, Any]) -> dict[str, Any]:
         datetime_fields = {
             k: v.replace(microsecond=0)
             for k, v in data.items()
@@ -453,13 +448,13 @@ class ORJSONModel(BaseModel):
         return {**data, **datetime_fields}
 
     def serializable_dict(self, **kwargs):
-       """Return a dict which contains only serializable fields."""
-        default_dict = super().dict(**kwargs)
+        """Return a dict which contains only serializable fields."""
+        default_dict = self.model_dump()
 
         return jsonable_encoder(default_dict)
+
 ```
 In the example above we have decided to make a global base model which: 
-- uses [orjson](https://github.com/ijl/orjson) to serialize data
 - drops microseconds to 0 in all date formats
 - serializes all datetime fields to standard format with explicit timezone 
 ### 9. Docs
@@ -516,9 +511,10 @@ Will generate docs like this:
 ![FastAPI Generated Custom Response Docs](images/custom_responses.png "Custom Response Docs")
 
 ### 10. Use Pydantic's BaseSettings for configs
-Pydantic gives a [powerful tool](https://pydantic-docs.helpmanual.io/usage/settings/) to parse environment variables and process them with its validators. 
+Pydantic gives a [powerful tool](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) to parse environment variables and process them with its validators. 
 ```python
-from pydantic import AnyUrl, BaseSettings, PostgresDsn
+from pydantic import AnyUrl, PostgresDsn
+from pydantic_settings import BaseSettings  # pydantic v2
 
 class AppSettings(BaseSettings):
     class Config:
@@ -595,7 +591,7 @@ async def test_create_post(client: TestClient):
 Unless you have sync db connections (excuse me?) or aren't planning to write integration tests.
 ### 15. BackgroundTasks > asyncio.create_task
 BackgroundTasks can [effectively run](https://github.com/encode/starlette/blob/31164e346b9bd1ce17d968e1301c3bb2c23bb418/starlette/background.py#L25)
-both blocking and non-blocking I/O operations the same way it handles routes (`sync` functions are run in a threadpool, while `async` ones are awaited later)
+both blocking and non-blocking I/O operations the same way FastAPI handles blocking routes (`sync` tasks are run in a threadpool, while `async` tasks are awaited later)
 - Don't lie to the worker and don't mark blocking I/O operations as `async`
 - Don't use it for heavy CPU intensive tasks.
 ```python
@@ -638,7 +634,7 @@ async def save_video(video_file: UploadFile):
      while chunk := await video_file.read(DEFAULT_CHUNK_SIZE):
          await f.write(chunk)
 ```
-### 18. Be careful with dynamic pydantic fields
+### 18. Be careful with dynamic pydantic fields (Pydantic v1)
 If you have a pydantic field that can accept a union of types, be sure the validator explicitly knows the difference between those types.
 ```python
 from pydantic import BaseModel
@@ -665,9 +661,9 @@ print(type(post.content))
 # Article is very inclusive and all fields are optional, allowing any dict to become valid
 ```
 **Solutions:**
-1. Validate input has only valid fields 
+1. Validate input has only allowed valid fields and raise error if unknowns are provided
 ```python
-from pydantic import BaseModel, Extra, root_validator
+from pydantic import BaseModel, Extra
 
 class Article(BaseModel):
    text: str | None
@@ -689,7 +685,7 @@ class Video(BaseModel):
 class Post(BaseModel):
    content: Article | Video
 ```
-2. Use Pydantic's Smart Union (>v1.9) if fields are simple
+2. Use Pydantic's Smart Union (>v1.9, <2.0) if fields are simple
 
 It's a good solution if the fields are simple like `int` or `bool`, 
 but it doesn't work for complex fields like classes.
@@ -732,7 +728,7 @@ print(type(p.content))
 # OUTPUT: Article, because smart_union doesn't work for complex fields like classes
 ```
 
-**Fast Workaround:**
+3. Fast Workaround
 
 Order field types properly: from the most strict ones to loose ones.
 
@@ -753,7 +749,7 @@ from pydantic import UUID4
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.sql.functions import coalesce
 
-from src.database import databse, posts, profiles, post_review, products
+from src.database import database, posts, profiles, post_review, products
 
 async def get_posts(
     creator_id: UUID4, *, limit: int = 10, offset: int = 0
@@ -871,7 +867,7 @@ ALLOWED_MEDIA_URLS = {"mysite.com", "mysite.org"}
 
 class CompanyMediaUrl(AnyUrl):
     @classmethod
-    def validate_host(cls, parts: dict) -> tuple[str, str, str, bool]:
+    def validate_host(cls, parts: dict) -> tuple[str, str, str, bool]:  # pydantic v1
        """Extend pydantic's AnyUrl validation to whitelist URL hosts."""
         host, tld, host_type, rebuild = super().validate_host(parts)
         if host not in ALLOWED_MEDIA_URLS:
@@ -887,7 +883,7 @@ class Profile(BaseModel):
 
 ```
 ### 21. Raise a ValueError in custom pydantic validators, if schema directly faces the client 
-It wil return a nice detailed response to users.
+It will return a nice detailed response to users.
 ```python
 # src.profiles.schemas
 from pydantic import BaseModel, validator
@@ -895,7 +891,7 @@ from pydantic import BaseModel, validator
 class ProfileCreate(BaseModel):
     username: str
     
-    @validator("username")
+    @validator("username")  # pydantic v1
     def validate_bad_words(cls, username: str):
         if username  == "me":
             raise ValueError("bad username, choose another")
@@ -917,7 +913,12 @@ async def get_creator_posts(profile_data: ProfileCreate):
 
 <img src="images/custom_bad_response.png" width="400" height="auto">
 
-### 22. Don't forget FastAPI converts Response Pydantic Object to Dict then to an instance of ResponseModel then to Dict then to JSON
+### 22. FastAPI converts Pydantic objects to dict, then to Pydantic object, then to JSON
+If you think you can return Pydantic object that matches your route's `response_model` to make some optimizations,
+then it's wrong. 
+
+FastAPI firstly converts that pydantic object to dict with its `jsonable_encoder`, then validates 
+data with your `response_model`, and only then serializes your object to JSON. 
 ```python
 from fastapi import FastAPI
 from pydantic import BaseModel, root_validator
@@ -949,7 +950,7 @@ async def root():
 [INFO] [2022-08-28 12:00:00.000030] called dict
 ```
 ### 23. If you must use sync SDK, then run it in a thread pool.
-If you must use an SDK to interact with external services, and it's not `async`,
+If you must use a library to interact with external services, and it's not `async`,
 then make the HTTP calls in an external worker thread.
 
 For a simple example, we could use our well-known `run_in_threadpool` from starlette.
@@ -968,19 +969,18 @@ async def call_my_sync_library():
     client = SyncAPIClient()
     await run_in_threadpool(client.make_request, data=my_data)
 ```
-### 24. Use linters (black, isort, autoflake)
+### 24. Use linters (black, ruff)
 With linters, you can forget about formatting the code and focus on writing the business logic.
 
 Black is the uncompromising code formatter that eliminates so many small decisions you have to make during development.
-Other linters help you write cleaner code and follow the PEP8.
+Ruff is "blazingly-fast" new linter that replaces autoflake and isort, and supports more than 600 lint rules.
 
 It's a popular good practice to use pre-commit hooks, but just using the script was ok for us.
 ```shell
 #!/bin/sh -e
 set -x
 
-autoflake --remove-all-unused-imports --recursive --remove-unused-variables --in-place src tests --exclude=__init__.py
-isort src tests --profile black
+ruff --fix
 black src tests
 ```
 ### Bonus Section
